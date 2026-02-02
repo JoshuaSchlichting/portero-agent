@@ -1,0 +1,64 @@
+[Unit]
+Description=Portero Agent - Backend registration and renewal for Portero
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Run as non-root; ensure the user/group exist and have appropriate permissions
+User=portero-agent
+Group=portero-agent
+
+# Optional environment file to override defaults and set secrets
+# Create /etc/portero-agent/portero-agent.env with variables such as:
+# PORTERO_REGISTER_URL, PORTERO_SERVICE_NAME, PORTERO_IPV6, PORTERO_IFACE, PORTERO_PORT,
+# PORTERO_USE_TLS, PORTERO_TTL_SECONDS, PORTERO_REGISTER_SECRET, PORTERO_JWT_HMAC_KEY, PORTERO_RENEWAL_FRACTION
+EnvironmentFile=-/etc/portero-agent/portero-agent.env
+
+# Defaults (can be overridden in EnvironmentFile or drop-in configs)
+Environment=PORTERO_AGENT_LOG=info
+Environment=PORTERO_REGISTER_URL=http://127.0.0.1:18080/register
+Environment=PORTERO_SERVICE_NAME=api.example.com
+Environment=PORTERO_IPV6=::1
+# Set interface name to auto-discover IPv6 (e.g., eth0). Empty means disabled.
+Environment=PORTERO_IFACE=
+Environment=PORTERO_PORT=443
+Environment=PORTERO_USE_TLS=true
+Environment=PORTERO_TTL_SECONDS=3600
+Environment=PORTERO_RENEWAL_FRACTION=0.7
+
+# REQUIRED secrets (override in EnvironmentFile or via a secure secret store integration)
+Environment=PORTERO_REGISTER_SECRET=changeme
+Environment=PORTERO_JWT_HMAC_KEY=changeme
+
+# Binary path; ensure installed (e.g., /usr/local/bin/portero-agent)
+ExecStart=/usr/local/bin/portero-agent \
+    --service-name ${PORTERO_SERVICE_NAME} \
+    --port ${PORTERO_PORT} \
+    --use-tls ${PORTERO_USE_TLS} \
+    --ttl-seconds ${PORTERO_TTL_SECONDS} \
+    --register-url ${PORTERO_REGISTER_URL} \
+    --register-secret ${PORTERO_REGISTER_SECRET} \
+    --jwt-hmac-key ${PORTERO_JWT_HMAC_KEY} \
+    --ipv6 ${PORTERO_IPV6} \
+    $([ -n "${PORTERO_IFACE}" ] && printf -- "--iface %s" "${PORTERO_IFACE}")
+
+# Restart strategy
+Restart=on-failure
+RestartSec=5s
+
+# Hardening options
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
