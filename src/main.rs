@@ -53,6 +53,10 @@ struct Cli {
     /// Renew when this fraction of TTL has elapsed (0.5..0.9 recommended)
     #[arg(long, env = "PORTERO_RENEWAL_FRACTION", default_value_t = 0.7)]
     renewal_fraction: f32,
+
+    /// Maximum seconds between registration attempts (ensures fast recovery if server restarts)
+    #[arg(long, env = "PORTERO_MAX_RENEWAL_INTERVAL", default_value_t = 15)]
+    max_renewal_interval: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -104,9 +108,10 @@ async fn main() -> Result<()> {
     // HTTP client
     let client = Client::builder().build()?;
 
-    // Renewal cadence
-    let renew_secs = (cli.ttl_seconds as f32 * cli.renewal_fraction)
+    // Renewal cadence: use TTL fraction, but cap at max_renewal_interval for fast recovery
+    let ttl_based_renewal = (cli.ttl_seconds as f32 * cli.renewal_fraction)
         .clamp(1.0, cli.ttl_seconds as f32 - 1.0) as u64;
+    let renew_secs = ttl_based_renewal.min(cli.max_renewal_interval);
 
     info!(
         "starting agent for {} at [{}]:{} use_tls={} ttl={}s renew={}s (iface={})",
