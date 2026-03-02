@@ -18,20 +18,18 @@ use tokio::time::sleep;
     about = "Registers and renews a backend with Portero"
 )]
 struct Cli {
-    #[arg(
-        long,
-        env = "PORTERO_REGISTER_URL",
-        default_value = "http://127.0.0.1:18080/register"
-    )]
+    /// URL of the Portero server's registration endpoint (e.g., "http://[::1]:18080/register")
+    #[arg(long, env = "PORTERO_REGISTER_URL")]
     register_url: String,
 
     #[arg(long, env = "PORTERO_SERVICE_NAME")]
     service_name: String,
 
-    #[arg(long, env = "PORTERO_IP", default_value = "::1")]
-    ip: String,
+    /// Explicit IP address to register. If not provided, auto-discovers a non-loopback IPv6 address.
+    #[arg(long, env = "PORTERO_IP")]
+    ip: Option<String>,
 
-    /// Optional network interface name to auto-discover IPv6 (overrides PORTERO_IP) (e.g., "eth0"). If provided, overrides PORTERO_IP.
+    /// Optional network interface name to auto-discover IPv6 (e.g., "eth0"). If provided, only looks for addresses on this interface.
     #[arg(long, env = "PORTERO_IFACE")]
     iface: Option<String>,
 
@@ -76,28 +74,47 @@ async fn main() -> Result<()> {
     .init();
     let cli = Cli::parse();
 
-    // Resolve IP via optional interface autodiscovery; fallback to configured IPv6
-    let selected_ip_str = if let Some(iface) = &cli.iface {
-        // Try to find the first global/unicast IPv6 address on the specified interface
-        match get_if_addrs() {
-            Ok(addrs) => {
-                let found = addrs
-                    .into_iter()
-                    .find(|ifa| ifa.name == *iface && matches!(ifa.addr, IfAddr::V6(_)));
-                if let Some(ifa) = found {
-                    if let IfAddr::V6(inet6) = ifa.addr {
-                        inet6.ip.to_string()
-                    } else {
-                        cli.ip.clone()
-                    }
-                } else {
-                    cli.ip.clone()
+    // Resolve IP: explicit > interface discovery > auto-discover any non-loopback IPv6
+    let selected_ip_str = if let Some(ip) = &cli.ip {
+        // Explicit IP provided
+        ip.clone()
+    } else {
+        // Auto-discover IPv6 address
+        let addrs = get_if_addrs().context("Failed to get network interfaces")?;
+
+        let found = addrs.into_iter().find(|ifa| {
+            // Filter by interface if specified
+            if let Some(iface) = &cli.iface {
+                if ifa.name != *iface {
+                    return false;
                 }
             }
-            Err(_) => cli.ip.clone(),
+            // Must be IPv6 and non-loopback
+            if let IfAddr::V6(inet6) = &ifa.addr {
+                !inet6.ip.is_loopback()
+            } else {
+                false
+            }
+        });
+
+        match found {
+            Some(ifa) => {
+                if let IfAddr::V6(inet6) = ifa.addr {
+                    inet6.ip.to_string()
+                } else {
+                    unreachable!()
+                }
+            }
+            None => {
+                return Err(anyhow!(
+                    "No non-loopback IPv6 address found{}. Set PORTERO_IP explicitly.",
+                    cli.iface
+                        .as_ref()
+                        .map(|i| format!(" on interface {}", i))
+                        .unwrap_or_default()
+                ));
+            }
         }
-    } else {
-        cli.ip.clone()
     };
 
     // Validate IP address
@@ -182,7 +199,7 @@ async fn register_once(client: &Client, cli: &Cli, selected_ip: &str) -> Result<
 
     info!(
         "registered {} [{}]:{} use_tls={} ttl={}s",
-        cli.service_name, cli.ip, cli.port, cli.use_tls, cli.ttl_seconds
+        cli.service_name, selected_ip, cli.port, cli.use_tls, cli.ttl_seconds
     );
     Ok(())
 }
